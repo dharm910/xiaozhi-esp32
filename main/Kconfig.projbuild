@@ -976,6 +976,25 @@ config USE_MULTILINE_CHAT_MESSAGE
         When disabled (default), a single-line horizontally scrolling label
         is shown at the bottom of the screen.
 
+config USE_CENTERED_CHAT_MESSAGE
+    bool "Show chat message in large font at screen center, without emoji face (default mode only)"
+    depends on USE_DEFAULT_MESSAGE_STYLE && !USE_MULTILINE_CHAT_MESSAGE
+    default n
+    help
+        When enabled, the emoji face is hidden and the chat message is shown
+        as wrapped text in a large 30px font in the middle of the screen.
+        The large font covers basic Latin characters and common math symbols.
+
+config STEM_TUTOR_SCREEN
+    bool "STEM tutor screen tools (diagrams, graphs, steps, quiz, simulations)"
+    depends on !USE_EMOTE_MESSAGE_STYLE
+    default n
+    help
+        Adds self.stem.* MCP tools so the model can draw diagrams, plot functions,
+        show step-by-step solutions, run quizzes, play small physics simulations and
+        show formula cards on the screen while it answers. Needs an LVGL display at
+        least 200 pixels wide. Adds eight tools to the model's tool list.
+
 choice WAKE_WORD_TYPE
     prompt "Wake Word Implementation Type"
     default WAKE_WORD_DISABLED
