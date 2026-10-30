@@ -8,13 +8,16 @@
 #include <string>
 #include <vector>
 
+#include "cjson_utils.h"
+
 class Display;
 class LvglTheme;
 
 // A full-width overlay below the status bar that shows STEM teaching content: diagrams,
-// function graphs, step-by-step solutions, quiz cards, small physics simulations, and
-// formula cards. Public methods are called from the main task and take the display lock;
-// the overlay's own timer runs in the LVGL task, which already holds it.
+// function graphs, step-by-step solutions, quiz cards, small physics simulations, formula
+// cards, and story mode: animated scenes timed to the spoken sentences. Public methods are
+// called from the main task and take the display lock; the overlay's own timer and
+// animations run in the LVGL task, which already holds it.
 // Every method returns an empty string on success or an error message for the model.
 class StemBoard {
 public:
@@ -45,10 +48,17 @@ public:
     std::string Animate(const AnimationParams& params);
     std::string ShowFormula(const std::string& name, const std::string& formula,
                             const cJSON* symbols);
+    // Story mode. `scenes` is copied, so the story can be replayed later.
+    std::string Story(const std::string& title, const cJSON* scenes);
+    std::string ReplayStory();
+    // Called when the server starts speaking a sentence; moves the story to the matching scene.
+    void OnSentence(const std::string& text);
+    // Comma-separated names of the pictures story mode can show.
+    static std::string IconNames();
     void Clear();
 
 private:
-    enum class Mode { kNone, kReveal, kPlot, kAnimation, kQuiz };
+    enum class Mode { kNone, kReveal, kPlot, kAnimation, kQuiz, kStory };
     enum class Animation { kPendulum, kProjectile, kWave, kOrbit, kAtom };
 
     struct PlotSegment {
@@ -60,6 +70,23 @@ private:
     struct Particle {
         lv_obj_t* obj;
         float vx, vy;
+    };
+    struct StoryObject {
+        std::string id;
+        lv_obj_t* obj;
+        int off_x, off_y;  // object position = anchor point - offset
+        bool scalable;     // icons and text; shapes live on full-canvas layers and cannot scale
+        bool is_text;
+        int32_t scale;     // intended transform scale (256 = 1x), even while an animation runs
+    };
+    struct PendingAction {
+        uint32_t at;
+        const cJSON* action;
+    };
+    struct PathData {
+        std::vector<lv_point_t> points;
+        std::vector<float> lengths;  // cumulative length at each point
+        int off_x, off_y;
     };
     struct Mover {
         lv_obj_t* obj;
@@ -120,12 +147,38 @@ private:
     std::vector<Particle> particles_;
     uint32_t particles_tick_ = 0;
 
+    // Story: story_ outlives ClearLocked() so it can be replayed
+    CJsonUniquePtr story_;
+    std::string story_title_;
+    std::vector<const cJSON*> scenes_;
+    int scene_ = -1;
+    uint32_t scene_tick_ = 0;
+    uint32_t scene_duration_ = 0;
+    bool story_synced_ = false;
+    std::vector<PendingAction> pending_;
+    std::vector<StoryObject> story_objects_;
+    std::vector<std::unique_ptr<PathData>> paths_;
+    lv_obj_t* caption_ = nullptr;
+    const lv_font_t* icon_font_ = nullptr;
+
     static void OnTimer(lv_timer_t* timer);
     void Tick();
     void TickReveal(uint32_t elapsed);
     void TickPlot(uint32_t elapsed);
     void TickAnimation(uint32_t elapsed);
     void TickParticles();
+    void TickStory();
+    static void ExecPathAnim(lv_anim_t* anim, int32_t v);
+
+    std::string ValidateStory(const cJSON* scenes) const;
+    void StartStory();
+    void StartScene(int index);
+    void JumpToScene(int index);
+    void ExecuteAction(const cJSON* action, bool instant);
+    StoryObject* FindStoryObject(const char* id);
+    bool BuildIcon(const char* name, lv_obj_t* box);
+    void FillTriangle(int tip_x, int tip_y, int x0, int x1, int base_y, lv_color_t color);
+    lv_obj_t* AddRect(int x, int y, int w, int h, lv_color_t color, bool fill, int radius = 0);
 
     void Begin(const std::string& title, Mode mode);
     void ClearLocked();

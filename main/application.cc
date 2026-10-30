@@ -568,6 +568,9 @@ void Application::InitializeProtocol() {
                               glyphs = std::move(glyphs), bpp]() {
                         display->AddTextGlyphs(glyphs, bpp);
                         display->SetChatMessage("assistant", message.c_str());
+#if CONFIG_STEM_TUTOR_SCREEN
+                        StemOnSentence(message);
+#endif
                     });
                 }
             }

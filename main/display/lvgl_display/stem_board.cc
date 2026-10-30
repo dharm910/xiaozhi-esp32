@@ -10,16 +10,19 @@
 #include "display.h"
 #include "lvgl_theme.h"
 #include "math_font.h"
+#include "stem_board_internal.h"
 #include "stem_expression.h"
 
 #define TAG "StemBoard"
 
 LV_FONT_DECLARE(font_noto_sans_basic_30_4);
+LV_FONT_DECLARE(font_stem_icons_40_4);
+
+using namespace stem_detail;
 
 namespace {
 
 constexpr uint32_t kFramePeriodMs = 33;
-constexpr uint32_t kAutoCloseMs = 120000;
 constexpr uint32_t kAfterAnswerCloseMs = 20000;
 constexpr uint32_t kDrawRevealMs = 450;
 constexpr uint32_t kPlotRevealMs = 1500;
@@ -30,7 +33,6 @@ constexpr int kMaxSteps = 12;
 constexpr int kMaxSymbols = 8;
 constexpr int kMaxMarks = 6;
 constexpr int kMaxCurves = 3;
-constexpr size_t kMaxTextLength = 120;
 constexpr float kGravity = 9.81f;
 constexpr int kPad = 6;
 
@@ -45,11 +47,6 @@ const char* const kElementSymbols[] = {"",   "H",  "He", "Li", "Be", "B",  "C",
                                        "N",  "O",  "F",  "Ne", "Na", "Mg", "Al",
                                        "Si", "P",  "S",  "Cl", "Ar", "K",  "Ca"};
 
-lv_color_t Accent() { return lv_palette_main(LV_PALETTE_BLUE); }
-lv_color_t Success() { return lv_palette_main(LV_PALETTE_GREEN); }
-lv_color_t Failure() { return lv_palette_main(LV_PALETTE_RED); }
-lv_color_t Muted() { return lv_palette_main(LV_PALETTE_GREY); }
-
 std::string FormatNumber(double v) {
     char buf[24];
     if (fabs(v) < 1e-9) {
@@ -59,67 +56,11 @@ std::string FormatNumber(double v) {
     return buf;
 }
 
-double NumberItem(const cJSON* obj, const char* key, double fallback) {
-    const cJSON* item = cJSON_GetObjectItem(obj, key);
-    return cJSON_IsNumber(item) ? item->valuedouble : fallback;
-}
-
-const char* StringItem(const cJSON* obj, const char* key) {
-    const cJSON* item = cJSON_GetObjectItem(obj, key);
-    return cJSON_IsString(item) ? item->valuestring : nullptr;
-}
-
-bool BoolItem(const cJSON* obj, const char* key, bool fallback) {
-    const cJSON* item = cJSON_GetObjectItem(obj, key);
-    return cJSON_IsBool(item) ? cJSON_IsTrue(item) : fallback;
-}
-
-// Reads [x, y] from an array item.
-bool ReadPoint(const cJSON* item, double& x, double& y) {
-    if (!cJSON_IsArray(item) || cJSON_GetArraySize(item) < 2) {
-        return false;
-    }
-    const cJSON* xi = cJSON_GetArrayItem(item, 0);
-    const cJSON* yi = cJSON_GetArrayItem(item, 1);
-    if (!cJSON_IsNumber(xi) || !cJSON_IsNumber(yi)) {
-        return false;
-    }
-    x = xi->valuedouble;
-    y = yi->valuedouble;
-    return true;
-}
-
-std::string Truncate(const char* text) {
-    std::string s = text != nullptr ? text : "";
-    if (s.size() > kMaxTextLength) {
-        // Cut on a UTF-8 boundary
-        size_t cut = kMaxTextLength;
-        while (cut > 0 && (static_cast<unsigned char>(s[cut]) & 0xC0) == 0x80) {
-            cut--;
-        }
-        s.resize(cut);
-    }
-    return s;
-}
-
 double NiceStep(double range) {
     double raw = range / 5;
     double mag = pow(10, floor(log10(raw)));
     double n = raw / mag;
     return (n < 1.5 ? 1 : n < 3.5 ? 2 : n < 7.5 ? 5 : 10) * mag;
-}
-
-void MakePlain(lv_obj_t* obj) {
-    lv_obj_remove_style_all(obj);
-    lv_obj_remove_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(obj, LV_OBJ_FLAG_CLICKABLE);
-}
-
-lv_obj_t* CreateLayer(lv_obj_t* parent) {
-    lv_obj_t* layer = lv_obj_create(parent);
-    MakePlain(layer);
-    lv_obj_set_size(layer, lv_pct(100), lv_pct(100));
-    return layer;
 }
 
 }  // namespace
@@ -165,6 +106,13 @@ void StemBoard::ClearLocked() {
     movers_.clear();
     particles_.clear();
     quiz_options_.clear();
+    // Deleting root_ also deleted every LVGL animation on its objects, so path data can go
+    scenes_.clear();
+    scene_ = -1;
+    pending_.clear();
+    story_objects_.clear();
+    paths_.clear();
+    caption_ = nullptr;
     point_buffers_.clear();
     mode_ = Mode::kNone;
 }
@@ -176,6 +124,7 @@ void StemBoard::Begin(const std::string& title, Mode mode) {
     background_color_ = lvgl_theme->background_color();
     text_font_ = WithMathSymbols(lvgl_theme->text_font()->font());
     large_font_ = WithMathSymbols(&font_noto_sans_basic_30_4);
+    icon_font_ = &font_stem_icons_40_4;
 
     root_ = lv_obj_create(lv_screen_active());
     MakePlain(root_);
@@ -220,6 +169,9 @@ void StemBoard::Tick() {
             break;
         case Mode::kAnimation:
             TickAnimation(elapsed);
+            break;
+        case Mode::kStory:
+            TickStory();
             break;
         default:
             break;
@@ -514,8 +466,9 @@ std::string StemBoard::Plot(const std::string& title, const std::string& express
         if (eq != std::string::npos) {
             part = part.substr(eq + 1);
         }
-        if (part.find_first_not_of(" \t") != std::string::npos) {
-            sources.push_back(part);
+        size_t first = part.find_first_not_of(" \t");
+        if (first != std::string::npos) {
+            sources.push_back(part.substr(first, part.find_last_not_of(" \t") - first + 1));
         }
         if (end == std::string::npos) {
             break;
@@ -1046,9 +999,9 @@ std::string StemBoard::Animate(const AnimationParams& params) {
             double range = p.speed * cos(theta) * flight;
             double height = pow(p.speed * sin(theta), 2) / (2 * kGravity);
             lv_label_set_text(title_, "Projectile motion");
-            snprintf(info, sizeof(info), "v = %d m/s, θ = %d°\nR = %.1f m\nH = %.1f m\nt = %.1f s",
+            snprintf(info, sizeof(info), "v = %d m/s, θ = %d°\nR %.1f m · H %.1f m · t %.1f s",
                      p.speed, p.angle, range, height, flight);
-            info_label(LV_ALIGN_TOP_RIGHT);
+            info_label(LV_ALIGN_TOP_LEFT);
             auto ground = AllocPoints(2);
             ground[0] = {0, h - 6};
             ground[1] = {w - 1, h - 6};
@@ -1173,7 +1126,9 @@ void StemBoard::TickAnimation(uint32_t elapsed) {
             double flight = 2 * v * sin(theta) / kGravity;
             double range = v * cos(theta) * flight;
             double height = pow(v * sin(theta), 2) / (2 * kGravity);
-            double scale = std::min((w - 24) / range, (h - 40) / height);
+            // The flight stays below the two-line info label
+            double scale =
+                std::min((w - 24) / range, (h - 10 - 2 * text_font_->line_height) / height);
             float phase = fmodf(t, kFlightSeconds + kHoldSeconds);
             double sim_t = std::min(phase, kFlightSeconds) / kFlightSeconds * flight;
             auto position = [&](double tt, int32_t& x, int32_t& y) {

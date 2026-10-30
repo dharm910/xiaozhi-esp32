@@ -16,6 +16,10 @@
 namespace {
 
 constexpr size_t kMaxJsonArgument = 6000;
+constexpr size_t kMaxStoryArgument = 10000;
+
+// Set once at registration, from the main task; read from the main task.
+StemBoard* stem_board = nullptr;
 
 // Parses a JSON-valued string argument. Returns nullptr and sets `error` when it is invalid.
 CJsonUniquePtr ParseJsonArgument(const PropertyList& properties, const char* name,
@@ -54,6 +58,7 @@ void RegisterStemTools() {
     }
     // Lives for the whole program, like the MCP server that holds the callbacks.
     auto board = new StemBoard(display);
+    stem_board = board;
     auto& mcp = McpServer::GetInstance();
     std::string canvas = std::to_string(board->canvas_width()) + " x " +
                          std::to_string(board->canvas_height());
@@ -251,11 +256,70 @@ void RegisterStemTools() {
                                            symbols.get()));
         });
 
+    mcp.AddTool(
+        "self.stem.story",
+        "Tell an animated story on the device screen: a short film of scenes, each with a "
+        "caption you speak while pictures appear, move, grow and change. Prefer it for "
+        "explaining processes and cause-and-effect (water cycle, photosynthesis, circuits, "
+        "digestion, food chains, moon phases, chemical reactions, how machines work).\n"
+        "IMPORTANT: after calling this tool, speak each scene's `say` text, in order, word for "
+        "word, one scene per sentence; scenes change exactly when you start saying them.\n"
+        "The canvas is " + canvas + " pixels, origin top-left; the caption covers the bottom "
+        "~60 px, so keep key objects above that.\n"
+        "Args:\n"
+        "  `title`: short heading.\n"
+        "  `scenes`: JSON array (at most 12) of {\"say\":\"...\",\"actions\":[...]}. Objects "
+        "persist across scenes until removed. Each action has `do`, `id` (object name), "
+        "optional `at` (ms after the scene starts) and `ms` (duration, default 800):\n"
+        "    add:    {\"do\":\"add\",\"id\":\"sun\",\"icon\":\"sun\",\"x\":40,\"y\":30,"
+        "\"size\":1.5,\"enter\":\"slide_top\"}  icon centered on x,y (44 px at size 1).\n"
+        "            Or a text {\"type\":\"text\",\"text\":\"CO₂\",\"x\":..,\"y\":..,"
+        "\"size\":\"large\"} or any shape {\"type\":\"line|polygon|arrow|rect|circle|dot|arc\", "
+        "...same fields as self.stem.draw}.\n"
+        "            `enter`: fade (default), grow, slide_left, slide_right, slide_top, "
+        "slide_bottom, none. Optional `color`.\n"
+        "    move:   {\"do\":\"move\",\"id\":\"drop\",\"to\":[x,y],\"ms\":1000,\"repeat\":false}\n"
+        "    path:   {\"do\":\"path\",\"id\":\"electron\",\"points\":[[x,y],...],\"ms\":2000,"
+        "\"repeat\":true}  follow a route; repeat loops it (flows, circuits, orbits).\n"
+        "    scale:  {\"do\":\"scale\",\"id\":\"plant\",\"to\":2}  icons and text only.\n"
+        "    fade:   {\"do\":\"fade\",\"id\":\"x\",\"to\":0.3}   color: "
+        "{\"do\":\"color\",\"id\":\"x\",\"to\":\"green\"}\n"
+        "    pulse:  {\"do\":\"pulse\",\"id\":\"x\",\"times\":3}  draw attention.\n"
+        "    text:   {\"do\":\"text\",\"id\":\"label\",\"text\":\"new text\"}\n"
+        "    remove: {\"do\":\"remove\",\"id\":\"x\"}\n"
+        "  Icons: " + StemBoard::IconNames() + ".\n"
+        "  `replay`: true replays the last story (then `scenes` can be empty), e.g. when the "
+        "student says \"show me again\".",
+        PropertyList({Property("title", kPropertyTypeString, std::string("")).SetMaxLength(80),
+                      Property("scenes", kPropertyTypeString, std::string(""))
+                          .SetMaxLength(kMaxStoryArgument),
+                      Property("replay", kPropertyTypeBoolean, false)}),
+        [board](const PropertyList& properties) -> ToolResult {
+            if (properties["replay"].value<bool>()) {
+                return Done(board->ReplayStory());
+            }
+            std::string error;
+            auto scenes = ParseJsonArgument(properties, "scenes", error);
+            if (!error.empty()) {
+                return std::unexpected(error);
+            }
+            if (scenes == nullptr) {
+                return std::unexpected("'scenes' is required unless replay is true");
+            }
+            return Done(board->Story(properties["title"].value<std::string>(), scenes.get()));
+        });
+
     mcp.AddTool("self.stem.clear",
-                "Remove the diagram, graph, steps, quiz, simulation or formula card from the "
-                "device screen. Content also disappears by itself after two minutes.",
+                "Remove the diagram, graph, steps, quiz, simulation, formula card or story from "
+                "the device screen. Content also disappears by itself after two minutes.",
                 PropertyList(), [board](const PropertyList& properties) -> ToolResult {
                     board->Clear();
                     return true;
                 });
+}
+
+void StemOnSentence(const std::string& text) {
+    if (stem_board != nullptr) {
+        stem_board->OnSentence(text);
+    }
 }

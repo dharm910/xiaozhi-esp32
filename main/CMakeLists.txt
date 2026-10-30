@@ -53,7 +53,9 @@ if(CONFIG_STEM_TUTOR_SCREEN OR CONFIG_USE_CENTERED_CHAT_MESSAGE)
 endif()
 if(CONFIG_STEM_TUTOR_SCREEN)
     list(APPEND SOURCES "display/lvgl_display/stem_board.cc"
+                        "display/lvgl_display/fonts/font_stem_icons_40_4.c"
                         "display/lvgl_display/stem_expression.cc"
+                        "display/lvgl_display/stem_story.cc"
                         "stem_tools.cc")
 endif()
 
