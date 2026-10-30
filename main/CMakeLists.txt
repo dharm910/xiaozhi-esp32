@@ -58,6 +58,11 @@ if(CONFIG_STEM_TUTOR_SCREEN)
                         "display/lvgl_display/stem_story.cc"
                         "stem_tools.cc")
 endif()
+set(STEM_EMBED_FILES "")
+if(CONFIG_STEM_SCREEN_MIRROR)
+    list(APPEND SOURCES "stem_mirror.cc")
+    list(APPEND STEM_EMBED_FILES "stem_mirror.html")
+endif()
 
 # Add board common files
 list(APPEND SOURCES
@@ -1207,7 +1212,7 @@ if(CONFIG_BOARD_TYPE_ESP32_P4_FUNCTION_EV_BOARD)
     )
 endif()
 idf_component_register(SRCS ${SOURCES}
-                    EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS}
+                    EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS} ${STEM_EMBED_FILES}
                     INCLUDE_DIRS ${INCLUDE_DIRS}
                     WHOLE_ARCHIVE
                     PRIV_REQUIRES

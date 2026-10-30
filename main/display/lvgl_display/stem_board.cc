@@ -157,6 +157,9 @@ void StemBoard::OnTimer(lv_timer_t* timer) {
 void StemBoard::Tick() {
     if (lv_tick_elaps(shown_tick_) > close_after_ms_) {
         ClearLocked();
+        if (on_closed_) {
+            on_closed_();
+        }
         return;
     }
     uint32_t elapsed = lv_tick_elaps(mode_tick_);

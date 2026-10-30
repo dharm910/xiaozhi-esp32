@@ -3,6 +3,7 @@
 #include <esp_log.h>
 
 #include <cstdlib>
+#include <cstring>
 #include <string>
 
 #include "board.h"
@@ -10,6 +11,9 @@
 #include "display.h"
 #include "mcp_server.h"
 #include "stem_board.h"
+#if CONFIG_STEM_SCREEN_MIRROR
+#include "stem_mirror.h"
+#endif
 
 #define TAG "StemTools"
 
@@ -35,11 +39,78 @@ CJsonUniquePtr ParseJsonArgument(const PropertyList& properties, const char* nam
     return json;
 }
 
+#if CONFIG_STEM_SCREEN_MIRROR
+// The last story, so a replay can be sent to the big screen even after other content.
+std::string last_story_message;
+
+std::string MirrorMessage(const char* tool, const PropertyList& properties,
+                          const std::string& result) {
+    static const char* const kJsonArguments[] = {"shapes", "marks", "steps",
+                                                 "options", "symbols", "scenes"};
+    CJsonUniquePtr message(cJSON_CreateObject());
+    cJSON_AddStringToObject(message.get(), "type", "stem");
+    cJSON_AddStringToObject(message.get(), "tool", tool);
+    cJSON* args = cJSON_AddObjectToObject(message.get(), "args");
+    PropertyList copy = properties;  // PropertyList only offers non-const iteration
+    for (const auto& property : copy) {
+        const char* name = property.name().c_str();
+        if (property.type() == kPropertyTypeBoolean) {
+            cJSON_AddBoolToObject(args, name, property.value<bool>());
+        } else if (property.type() == kPropertyTypeInteger) {
+            cJSON_AddNumberToObject(args, name, property.value<int>());
+        } else {
+            const auto& text = property.value<std::string>();
+            cJSON* parsed = nullptr;
+            for (const char* json_name : kJsonArguments) {
+                if (property.name() == json_name) {
+                    parsed = cJSON_Parse(text.c_str());
+                }
+            }
+            if (parsed != nullptr) {
+                cJSON_AddItemToObject(args, name, parsed);
+            } else {
+                cJSON_AddStringToObject(args, name, text.c_str());
+            }
+        }
+    }
+    if (!result.empty()) {
+        cJSON_AddStringToObject(message.get(), "result", result.c_str());
+    }
+    CJsonStringUniquePtr text(cJSON_PrintUnformatted(message.get()));
+    return text != nullptr ? std::string(text.get()) : std::string();
+}
+#endif
+
+// Shows a successful tool call on the big screen too.
+void Mirror(const char* tool, const PropertyList& properties,
+            const std::string& result = std::string()) {
+#if CONFIG_STEM_SCREEN_MIRROR
+    auto message = MirrorMessage(tool, properties, result);
+    if (message.empty()) {
+        return;
+    }
+    if (strcmp(tool, "story") == 0) {
+        last_story_message = message;
+    }
+    bool update = strcmp(tool, "quiz_answer") == 0;
+    StemMirror::GetInstance().Publish(
+        update ? StemMirror::Kind::kUpdate : StemMirror::Kind::kContent, message);
+#endif
+}
+
 ToolResult Done(const std::string& error) {
     if (!error.empty()) {
         return std::unexpected(error);
     }
     return true;
+}
+
+// Returns the board's result for the model, mirroring the content when it was shown.
+ToolResult Done(const char* tool, const PropertyList& properties, const std::string& error) {
+    if (error.empty()) {
+        Mirror(tool, properties);
+    }
+    return Done(error);
 }
 
 double ParseDouble(const std::string& text, double fallback) {
@@ -96,8 +167,9 @@ void RegisterStemTools() {
             if (!error.empty()) {
                 return std::unexpected(error);
             }
-            return Done(board->Draw(properties["title"].value<std::string>(), shapes.get(),
-                                    properties["animate"].value<bool>()));
+            auto shown = board->Draw(properties["title"].value<std::string>(), shapes.get(),
+                                     properties["animate"].value<bool>());
+            return Done("draw", properties, shown);
         });
 
     mcp.AddTool(
@@ -126,11 +198,12 @@ void RegisterStemTools() {
             if (!error.empty()) {
                 return std::unexpected(error);
             }
-            return Done(board->Plot(properties["title"].value<std::string>(),
-                                    properties["expression"].value<std::string>(),
-                                    ParseDouble(properties["x_min"].value<std::string>(), -10),
-                                    ParseDouble(properties["x_max"].value<std::string>(), 10),
-                                    properties["y_range"].value<std::string>(), marks.get()));
+            auto shown = board->Plot(properties["title"].value<std::string>(),
+                                     properties["expression"].value<std::string>(),
+                                     ParseDouble(properties["x_min"].value<std::string>(), -10),
+                                     ParseDouble(properties["x_max"].value<std::string>(), 10),
+                                     properties["y_range"].value<std::string>(), marks.get());
+            return Done("plot", properties, shown);
         });
 
     mcp.AddTool(
@@ -156,8 +229,9 @@ void RegisterStemTools() {
             if (!error.empty()) {
                 return std::unexpected(error);
             }
-            return Done(board->ShowSteps(properties["title"].value<std::string>(), steps.get(),
-                                         properties["interval_ms"].value<int>()));
+            auto shown = board->ShowSteps(properties["title"].value<std::string>(), steps.get(),
+                                          properties["interval_ms"].value<int>());
+            return Done("show_steps", properties, shown);
         });
 
     mcp.AddTool(
@@ -177,7 +251,8 @@ void RegisterStemTools() {
             if (!error.empty()) {
                 return std::unexpected(error);
             }
-            return Done(board->AskQuiz(properties["question"].value<std::string>(), options.get()));
+            auto shown = board->AskQuiz(properties["question"].value<std::string>(), options.get());
+            return Done("quiz_ask", properties, shown);
         });
 
     mcp.AddTool(
@@ -200,6 +275,7 @@ void RegisterStemTools() {
             if (!error.empty()) {
                 return std::unexpected(error);
             }
+            Mirror("quiz_answer", properties, result);
             return result;
         });
 
@@ -229,7 +305,8 @@ void RegisterStemTools() {
             params.length_cm = properties["length_cm"].value<int>();
             params.electrons = properties["electrons"].value<int>();
             params.count = properties["count"].value<int>();
-            return Done(board->Animate(params));
+            auto shown = board->Animate(params);
+            return Done("animate", properties, shown);
         });
 
     mcp.AddTool(
@@ -251,9 +328,10 @@ void RegisterStemTools() {
             if (!error.empty()) {
                 return std::unexpected(error);
             }
-            return Done(board->ShowFormula(properties["name"].value<std::string>(),
-                                           properties["formula"].value<std::string>(),
-                                           symbols.get()));
+            auto shown = board->ShowFormula(properties["name"].value<std::string>(),
+                                            properties["formula"].value<std::string>(),
+                                            symbols.get());
+            return Done("formula", properties, shown);
         });
 
     mcp.AddTool(
@@ -296,7 +374,14 @@ void RegisterStemTools() {
                       Property("replay", kPropertyTypeBoolean, false)}),
         [board](const PropertyList& properties) -> ToolResult {
             if (properties["replay"].value<bool>()) {
-                return Done(board->ReplayStory());
+                auto error = board->ReplayStory();
+#if CONFIG_STEM_SCREEN_MIRROR
+                if (error.empty() && !last_story_message.empty()) {
+                    StemMirror::GetInstance().Publish(StemMirror::Kind::kContent,
+                                                      last_story_message);
+                }
+#endif
+                return Done(error);
             }
             std::string error;
             auto scenes = ParseJsonArgument(properties, "scenes", error);
@@ -306,20 +391,96 @@ void RegisterStemTools() {
             if (scenes == nullptr) {
                 return std::unexpected("'scenes' is required unless replay is true");
             }
-            return Done(board->Story(properties["title"].value<std::string>(), scenes.get()));
+            auto shown = board->Story(properties["title"].value<std::string>(), scenes.get());
+            return Done("story", properties, shown);
         });
+
+#if CONFIG_STEM_SCREEN_MIRROR
+    board->SetListeners(
+        [](int scene) {
+            char message[48];
+            snprintf(message, sizeof(message), "{\"type\":\"scene\",\"index\":%d}", scene);
+            StemMirror::GetInstance().Publish(StemMirror::Kind::kScene, message);
+        },
+        []() {
+            StemMirror::GetInstance().Publish(StemMirror::Kind::kClear, "{\"type\":\"clear\"}");
+        });
+
+    mcp.AddTool("self.stem.big_screen",
+                "Get the web address that shows everything from the device screen in large, "
+                "sharp form on any TV, laptop, tablet or projector on the same Wi-Fi. Use it when "
+                "the user asks how to show the lessons on a big screen. Tell them to open the "
+                "address in a web browser; it also appears on the device screen.",
+                PropertyList(), [](const PropertyList& properties) -> ToolResult {
+                    auto url = StemMirror::GetInstance().Url();
+                    if (url.empty()) {
+                        return std::unexpected("The device is not connected to Wi-Fi");
+                    }
+                    std::string notice = "Big screen: " + url;
+                    Board::GetInstance().GetDisplay()->ShowNotification(notice, 15000);
+                    return url;
+                });
+#endif
 
     mcp.AddTool("self.stem.clear",
                 "Remove the diagram, graph, steps, quiz, simulation, formula card or story from "
                 "the device screen. Content also disappears by itself after two minutes.",
                 PropertyList(), [board](const PropertyList& properties) -> ToolResult {
                     board->Clear();
+#if CONFIG_STEM_SCREEN_MIRROR
+                    StemMirror::GetInstance().Publish(StemMirror::Kind::kClear,
+                                                      "{\"type\":\"clear\"}");
+#endif
                     return true;
                 });
 }
 
+#if CONFIG_STEM_SCREEN_MIRROR
+namespace {
+
+void PublishSpeech(const char* role, const std::string& text) {
+    CJsonUniquePtr message(cJSON_CreateObject());
+    cJSON_AddStringToObject(message.get(), "type", "say");
+    cJSON_AddStringToObject(message.get(), "role", role);
+    cJSON_AddStringToObject(message.get(), "text", text.c_str());
+    CJsonStringUniquePtr json(cJSON_PrintUnformatted(message.get()));
+    if (json != nullptr) {
+        StemMirror::GetInstance().Publish(StemMirror::Kind::kTransient, json.get());
+    }
+}
+
+}  // namespace
+#endif
+
 void StemOnSentence(const std::string& text) {
+#if CONFIG_STEM_SCREEN_MIRROR
+    PublishSpeech("assistant", text);
+#endif
     if (stem_board != nullptr) {
         stem_board->OnSentence(text);
     }
+}
+
+void StemOnUserText(const std::string& text) {
+#if CONFIG_STEM_SCREEN_MIRROR
+    PublishSpeech("user", text);
+#else
+    (void)text;
+#endif
+}
+
+void StemOnNetworkConnected() {
+#if CONFIG_STEM_SCREEN_MIRROR
+    if (stem_board == nullptr) {
+        return;
+    }
+    auto& mirror = StemMirror::GetInstance();
+    if (mirror.Start(stem_board->canvas_width(), stem_board->canvas_height())) {
+        auto url = mirror.Url();
+        if (!url.empty()) {
+            std::string notice = "Big screen: " + url;
+            Board::GetInstance().GetDisplay()->ShowNotification(notice, 15000);
+        }
+    }
+#endif
 }

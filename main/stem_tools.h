@@ -11,5 +11,9 @@ void RegisterStemTools();
 // Forwards a TTS sentence that just started playing, so story mode can follow the speech.
 // Call from the main task.
 void StemOnSentence(const std::string& text);
+// Forwards what the user said (speech-to-text), for big-screen subtitles.
+void StemOnUserText(const std::string& text);
+// Starts the big-screen web server once the network is up and shows its address.
+void StemOnNetworkConnected();
 
 #endif  // STEM_TOOLS_H

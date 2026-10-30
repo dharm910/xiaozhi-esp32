@@ -993,7 +993,18 @@ config STEM_TUTOR_SCREEN
         Adds self.stem.* MCP tools so the model can draw diagrams, plot functions,
         show step-by-step solutions, run quizzes, play small physics simulations and
         show formula cards on the screen while it answers. Needs an LVGL display at
-        least 200 pixels wide. Adds eight tools to the model's tool list.
+        least 200 pixels wide. Adds nine tools to the model's tool list.
+
+config STEM_SCREEN_MIRROR
+    bool "Big screen: mirror STEM content to a web page"
+    depends on STEM_TUTOR_SCREEN
+    select HTTPD_WS_SUPPORT
+    default y
+    help
+        Serves a web page at http://<device-ip>/ that shows the diagrams, graphs,
+        stories, quizzes and subtitles in large, sharp form on any browser on the
+        same Wi-Fi: a TV, laptop, tablet or projector. Adds one tool that tells the
+        model the address.
 
 choice WAKE_WORD_TYPE
     prompt "Wake Word Implementation Type"

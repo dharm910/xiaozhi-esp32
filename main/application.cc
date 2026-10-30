@@ -140,6 +140,9 @@ void Application::Initialize() {
                 display->ShowNotification(msg.c_str(), 30000);
                 display->SetChatMessage("system", msg.c_str());
                 xEventGroupSetBits(event_group_, MAIN_EVENT_NETWORK_CONNECTED);
+#if CONFIG_STEM_TUTOR_SCREEN
+                StemOnNetworkConnected();
+#endif
                 break;
             }
             case NetworkEvent::Disconnected:
@@ -584,6 +587,9 @@ void Application::InitializeProtocol() {
                           glyphs = std::move(glyphs), bpp]() {
                     display->AddTextGlyphs(glyphs, bpp);
                     display->SetChatMessage("user", message.c_str());
+#if CONFIG_STEM_TUTOR_SCREEN
+                    StemOnUserText(message);
+#endif
                 });
             }
         } else if (strcmp(type->valuestring, "llm") == 0) {

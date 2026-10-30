@@ -4,6 +4,7 @@
 #include <cJSON.h>
 #include <lvgl.h>
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -53,6 +54,12 @@ public:
     std::string ReplayStory();
     // Called when the server starts speaking a sentence; moves the story to the matching scene.
     void OnSentence(const std::string& text);
+    // Called when a story scene starts, and when content closes by itself. Either may run in
+    // the LVGL task or the main task, with the display lock held.
+    void SetListeners(std::function<void(int scene)> on_scene, std::function<void()> on_closed) {
+        on_scene_ = std::move(on_scene);
+        on_closed_ = std::move(on_closed);
+    }
     // Comma-separated names of the pictures story mode can show.
     static std::string IconNames();
     void Clear();
@@ -110,6 +117,8 @@ private:
     uint32_t mode_tick_ = 0;
     uint32_t close_after_ms_ = 0;
     Mode mode_ = Mode::kNone;
+    std::function<void(int)> on_scene_;
+    std::function<void()> on_closed_;
 
     const lv_font_t* text_font_ = nullptr;
     const lv_font_t* large_font_ = nullptr;

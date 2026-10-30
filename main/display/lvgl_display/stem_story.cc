@@ -451,6 +451,9 @@ void StemBoard::StartScene(int index) {
                                 : std::max(estimate, end + 500);
     ESP_LOGI(TAG, "Scene %d/%d, %u ms", index + 1, (int)scenes_.size(),
              (unsigned)scene_duration_);
+    if (on_scene_) {
+        on_scene_(index);
+    }
 }
 
 void StemBoard::JumpToScene(int index) {
